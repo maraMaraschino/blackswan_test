@@ -17,7 +17,7 @@ caution_distance = 10000
 prediction_window = 120
 
 # How frequently to sample MDS [s]
-check_interval = 1.0
+check_interval = 5.0
 
 # MDS Setup
 def configure_monitor():
@@ -45,11 +45,8 @@ def get_range():
 
     for sat, entries in constraints.items():
         for constraint in entries:
-            constraint_type = str(
-                constraint.get("type", "")
-            ).lower()
-            if "range" in constraint_type:
-                range_m = float(constraint["value"])
+            if constraint.get("type") == 6:
+                range_m = float(constraint["actualValue"])
                 return jd, range_m
 
     raise RuntimeError("Range-to-target not returned by MDS.")
@@ -124,13 +121,23 @@ def monitor():
 
     while True:
         try:
+            # Advance simulation
+            mds_api.step_sim(1, True)
+
+            # Read current state
             sim_jd, current_range = get_range()
+
             current_time = time.monotonic()
 
             # First measurement
             if previous_range is None:
                 closing_velocity = 0.0
                 predicted_time   = None
+                risk = "SAFE"
+                print(f"Initial risk:  {risk}")
+                print(f"Initial range: {current_range/1000:.2f} km")
+                previous_range = current_range
+                previous_time  = current_time
 
             else:
                 elapsed          = (current_time - previous_time)
@@ -139,7 +146,7 @@ def monitor():
                 risk             = determine_risk(current_range, predicted_time)
 
                 # Display current state
-                print("-" *20)
+                print("-" * 20)
                 print(f"Range:\n{current_range/1000:.3f} km")
                 print(f"Closing Velocity:\n{closing_velocity:.3f} m/s")
                 print(f"Predicted boundary crossing time:")
@@ -171,9 +178,17 @@ collision would become inevitable if not for autonomous systems preventing it.
     mds_api.clear_scene()
     mds_api.enable_API_synchronization()
     mds_api.set_utc_date(2026, 1, 1, 12, 0, 0, 0)
+    mds_api.set_time_scale(1)
     mds_api.set_simulation_timestep(0.2)
 
     # Create satellites (using values from example_constraint_monitor_correction.py)
+    print("Adding satellites to scene...")
+
+    # Thruster settings (values from example_constraint_monitor_correction.py)
+    Tmax_g1  = 1.0 # N
+    dVmax_g1 = 200.0 # m/s
+    Isp_g1   = 2000.0 # s
+
     for n, sat_name in enumerate(sat_list):
         mds_api.add_sat_from_elements(
             sat_name,
@@ -183,8 +198,18 @@ collision would become inevitable if not for autonomous systems preventing it.
             65,       # Inclination
             27,       # Right ascension
             32,       # Periapsis [deg]
-            5 + 1*n, # True anomoly [deg]
+            1 + 1*n,  # True anomoly [deg]
             "Earth"   # Central body
         )
+        # Give satellites thrusters
+        mds_api.add_thruster(
+            sat_name,
+            Tmax_g1,      # Thrust max
+            dVmax_g1 * n, # delta V
+            Isp_g1,       # isp
+            1000,         # burn duration limit
+            1.0 + 2*n     # fuel consumption rate
+        )
+        print(f"Added {sat_name} to scene...")
 
-        monitor()
+    monitor()
