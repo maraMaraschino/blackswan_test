@@ -1,5 +1,4 @@
 from mds_api import mds_api
-from datetime import datetime, timezone
 import time
 
 satellite_a = "Sat A"
@@ -115,38 +114,41 @@ def monitor():
     configure_monitor()
 
     previous_range = None
-    previous_time  = None
+    previous_jd  = None
 
     print("\nCollision monitor started.\n")
 
     while True:
         try:
-            # Advance simulation
-            mds_api.step_sim(1, True)
+            # Advance simulation by one second
+            mds_api.step_sim(5, True)
 
             # Read current state
             sim_jd, current_range = get_range()
-
-            current_time = time.monotonic()
 
             # First measurement
             if previous_range is None:
                 closing_velocity = 0.0
                 predicted_time   = None
+
+                # Update distance and time
+                previous_range = current_range
+                previous_jd  = sim_jd
+
                 risk = "SAFE"
                 print(f"Initial risk:  {risk}")
                 print(f"Initial range: {current_range/1000:.2f} km")
-                previous_range = current_range
-                previous_time  = current_time
 
             else:
-                elapsed          = (current_time - previous_time)
+                # Convert jd time from days to seconds
+                elapsed          = (sim_jd - previous_jd) * 86400
                 closing_velocity = calculate_closing_velocity(previous_range, current_range, elapsed)
                 predicted_time   = predict_collision_time(current_range, closing_velocity)
                 risk             = determine_risk(current_range, predicted_time)
 
                 # Display current state
-                print("-" * 20)
+                print("-" * 40)
+                print(f"Julian date: {sim_jd}")
                 print(f"Range:\n{current_range/1000:.3f} km")
                 print(f"Closing Velocity:\n{closing_velocity:.3f} m/s")
                 print(f"Predicted boundary crossing time:")
@@ -157,16 +159,20 @@ def monitor():
 
                 # Save current state
                 previous_range = current_range
-                previous_time = current_time
+                previous_jd = sim_jd
 
-                time.sleep(check_interval)
+                error_count = 0
 
         except KeyboardInterrupt:
             print("\nCollision monitor stopped.")
             break
         except Exception as error:
-            print(f"Monitor error: {error}")
+            error_count += 1
+            print(f"Monitor error {error_count}/5: {error}")
             time.sleep(check_interval)
+            if error_count >= 5:
+                print("Too many consecutive errors. Stopping monitor.")
+                break
 
 if __name__ == "__main__":
     print("""
@@ -178,8 +184,8 @@ collision would become inevitable if not for autonomous systems preventing it.
     mds_api.clear_scene()
     mds_api.enable_API_synchronization()
     mds_api.set_utc_date(2026, 1, 1, 12, 0, 0, 0)
-    mds_api.set_time_scale(1)
-    mds_api.set_simulation_timestep(0.2)
+    mds_api.set_simulation_timestep(1)
+
 
     # Create satellites (using values from example_constraint_monitor_correction.py)
     print("Adding satellites to scene...")
@@ -192,14 +198,14 @@ collision would become inevitable if not for autonomous systems preventing it.
     for n, sat_name in enumerate(sat_list):
         mds_api.add_sat_from_elements(
             sat_name,
-            100,      # Mass [kg]
-            7e6,      # Semi-major axis [m]
-            1e-3,     # Eccentricity
-            65,       # Inclination
-            27,       # Right ascension
-            32,       # Periapsis [deg]
-            1 + 1*n,  # True anomoly [deg]
-            "Earth"   # Central body
+            100,            # Mass [kg]
+            7e6 + (5000*n), # Semi-major axis [m]
+            1e-3,           # Eccentricity
+            65,             # Inclination
+            27,             # Right ascension
+            32,             # Periapsis [deg]
+            1 + 1*n,        # True anomoly [deg]
+            "Earth"         # Central body
         )
         # Give satellites thrusters
         mds_api.add_thruster(
@@ -211,5 +217,5 @@ collision would become inevitable if not for autonomous systems preventing it.
             1.0 + 2*n     # fuel consumption rate
         )
         print(f"Added {sat_name} to scene...")
-
+    
     monitor()
