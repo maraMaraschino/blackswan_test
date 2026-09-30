@@ -1,4 +1,6 @@
 from mds_api import mds_api
+import numpy as np
+import math
 import time
 
 satellite_a = "Sat A"
@@ -33,6 +35,23 @@ def configure_monitor():
 
     print(f"Monitoring distance between:\n{satellite_a} and {satellite_b}")
     print(f"Safety boundary:\n{safety_distance/1000:.2f} km")
+
+# Set true anomaly for desired distance
+def set_true_anomaly(distance, altitude):
+    """
+    Calculate true-anomaly separation required for two satellites on same circular orbit
+    to have a specified distance along a cord.
+
+    distance: desired separation [km]
+    altitude: desired orbital altitude [km]
+    """
+    # Convert distance and altitude to m
+    distance = distance * 1000
+    altitude = altitude * 1000
+    r_earth = 6371 * 1000 # m
+
+    angle_rad = 2 * np.arcsin(distance / (2 * (altitude + r_earth)))
+    return math.degrees(angle_rad)
 
 # Read current range from MDS
 def get_range():
@@ -186,9 +205,15 @@ collision would become inevitable if not for autonomous systems preventing it.
     mds_api.set_utc_date(2026, 1, 1, 12, 0, 0, 0)
     mds_api.set_simulation_timestep(1)
 
-
     # Create satellites (using values from example_constraint_monitor_correction.py)
     print("Adding satellites to scene...")
+
+    # Define constants
+    init_distance = 15                                        # km
+    init_alt      = 800                                       # km
+    radius_earth  = 6371                                      # km
+    semi_maj_a    = radius_earth + init_alt                   # km
+    init_nu       = set_true_anomaly(init_distance, init_alt) # deg
 
     # Thruster settings (values from example_constraint_monitor_correction.py)
     Tmax_g1  = 1.0 # N
@@ -198,23 +223,23 @@ collision would become inevitable if not for autonomous systems preventing it.
     for n, sat_name in enumerate(sat_list):
         mds_api.add_sat_from_elements(
             sat_name,
-            100,            # Mass [kg]
-            7e6 + (5000*n), # Semi-major axis [m]
-            1e-3,           # Eccentricity
-            65,             # Inclination
-            27,             # Right ascension
-            32,             # Periapsis [deg]
-            1 + 1*n,        # True anomoly [deg]
-            "Earth"         # Central body
+            100,               # Mass [kg]
+            semi_maj_a * 1000, # Semi-major axis [m]
+            0,                 # Eccentricity
+            180,               # Inclination
+            90,                # Right ascension
+            90,                # Periapsis [deg]
+            init_nu * n,       # True anomoly [deg]
+            "Earth"            # Central body
         )
         # Give satellites thrusters
         mds_api.add_thruster(
             sat_name,
-            Tmax_g1,      # Thrust max
-            dVmax_g1 * n, # delta V
-            Isp_g1,       # isp
-            1000,         # burn duration limit
-            1.0 + 2*n     # fuel consumption rate
+            Tmax_g1,  # Thrust max
+            dVmax_g1, # delta V
+            Isp_g1,   # isp
+            1000,     # burn duration limit
+            1.0       # fuel consumption rate
         )
         print(f"Added {sat_name} to scene...")
     
