@@ -53,6 +53,29 @@ def set_true_anomaly(distance, altitude):
     angle_rad = 2 * np.arcsin(distance / (2 * (altitude + r_earth)))
     return math.degrees(angle_rad)
 
+def get_retrograde_thrust(sat_name, thrust_mag):
+    jd, pos, vel = mds_api.get_sat_pos_vel(sat_name)
+
+    vx, vy, vz = vel
+
+    speed = math.sqrt(vx**2 + vy**2 + vz**2)
+    if speed == 0:
+        raise RuntimeError("Satellite velocity is zero.")
+
+    thrust_vector = [
+        -thrust_mag * vx / speed,
+        -thrust_mag * vy / speed,
+        -thrust_mag * vz / speed,
+    ]
+
+    return thrust_vector
+
+def apply_anomalous_burn(sat_name, duration_s, thrust_mag):
+    for _ in range(duration_s):
+        thrust_vector = get_retrograde_thrust( sat_name, thrust_mag)
+        mds_api.apply_thrust(sat_name, thrust_vector, inertial=False)
+        mds_api.step_sim(1, True)
+
 # Read current range from MDS
 def get_range():
     """
@@ -116,6 +139,7 @@ def determine_risk(current_range, predicted_time):
     return "SAFE"
     
 def autonomous_response(risk):
+    # Actions to be replaced with code to trigger autonomous responses.
     if risk == "SAFE":
         print("ACTION: Continue normal operations.")
 
@@ -127,7 +151,9 @@ def autonomous_response(risk):
 
 def monitor():
     """
-    
+    Monitor satellites and printout data related to their respective velocities, boundary crossing times,
+    current risk assessment, and current recommended operation actions. After 120 seconds, trigger 
+    anomalous burn event.
     """
 
     configure_monitor()
@@ -136,11 +162,18 @@ def monitor():
     previous_jd  = None
 
     print("\nCollision monitor started.\n")
+    sim_jd, current_range = get_range()
+    init_jd = sim_jd
+
+    # Burn event values
+    event_triggered = False
+    burn_active     = False
+    burn_end_time   = None
 
     while True:
         try:
             # Advance simulation by one second
-            mds_api.step_sim(5, True)
+            mds_api.step_sim(1, True)
 
             # Read current state
             sim_jd, current_range = get_range()
@@ -168,6 +201,7 @@ def monitor():
                 # Display current state
                 print("-" * 40)
                 print(f"Julian date: {sim_jd}")
+                print(f"Elapsed time: {(sim_jd - init_jd) * 86400:.2f} s")
                 print(f"Range:\n{current_range/1000:.3f} km")
                 print(f"Closing Velocity:\n{closing_velocity:.3f} m/s")
                 print(f"Predicted boundary crossing time:")
@@ -175,6 +209,7 @@ def monitor():
                 print(f"Risk: {risk}")
 
                 autonomous_response(risk)
+                get_retrograde_thrust(satellite_b)
 
                 # Save current state
                 previous_range = current_range
@@ -195,8 +230,8 @@ def monitor():
 
 if __name__ == "__main__":
     print("""
-Two satellites are in a normal safe range until an event, at which point a 
-collision would become inevitable if not for autonomous systems preventing it.
+Two satellites are in a normal safe range until an event, at which point the risk
+assessment would reach CRITICAL if not for autonomous systems preventing it.
 """)
 
     # Scene setup
@@ -205,7 +240,6 @@ collision would become inevitable if not for autonomous systems preventing it.
     mds_api.set_utc_date(2026, 1, 1, 12, 0, 0, 0)
     mds_api.set_simulation_timestep(1)
 
-    # Create satellites (using values from example_constraint_monitor_correction.py)
     print("Adding satellites to scene...")
 
     # Define constants
