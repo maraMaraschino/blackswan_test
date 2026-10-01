@@ -17,8 +17,19 @@ caution_distance = 10000
 # How far in future to look [s]
 prediction_window = 120
 
-# How frequently to sample MDS [s]
-check_interval = 5.0
+# How frequently to print current state [s]
+report_interval = 10.0
+
+# How long to apply anomalous thruster burn [s]
+burn_duration = 30 
+
+# Thruster settings
+Tmax_g1  = 30.0 # N
+dVmax_g1 = 200.0 # m/s
+Isp_g1   = 2000.0 # s
+
+# Anomalous thrust value
+burn_force = 100.0 # N
 
 # MDS Setup
 def configure_monitor():
@@ -72,7 +83,7 @@ def get_retrograde_thrust(sat_name, thrust_mag):
 
 def apply_anomalous_burn(sat_name, duration_s, thrust_mag):
     for _ in range(duration_s):
-        thrust_vector = get_retrograde_thrust( sat_name, thrust_mag)
+        thrust_vector = get_retrograde_thrust(sat_name, thrust_mag)
         mds_api.apply_thrust(sat_name, thrust_vector, inertial=False)
         mds_api.step_sim(1, True)
 
@@ -158,6 +169,8 @@ def monitor():
 
     configure_monitor()
 
+    error_count = 0
+
     previous_range = None
     previous_jd  = None
 
@@ -178,18 +191,43 @@ def monitor():
             # Read current state
             sim_jd, current_range = get_range()
 
+            # Total elapsed time
+            elapsed_since_init    = (sim_jd - init_jd) * 86400
+
+            if not event_triggered and elapsed_since_init >= 120:
+                event_triggered = True
+                burn_active     = True
+                burn_end_time   = elapsed_since_init + burn_duration
+
+                thrust_vector = get_retrograde_thrust(satellite_b, burn_force)
+                print("\nEVENT: Sat B trajectory deviation!")
+
+            # Apply burn
+            if burn_active:
+                if elapsed_since_init < burn_end_time:
+                    mds_api.apply_thrust(satellite_b, thrust_vector, inertial=True)
+
+                else:
+                    burn_active = False
+                    print("EVENT: Sat B burn complete.")
+
             # First measurement
             if previous_range is None:
+
                 closing_velocity = 0.0
                 predicted_time   = None
 
+                risk = determine_risk(current_range, predicted_time)
+
                 # Update distance and time
                 previous_range = current_range
-                previous_jd  = sim_jd
+                previous_jd    = sim_jd
 
-                risk = "SAFE"
                 print(f"Initial risk:  {risk}")
                 print(f"Initial range: {current_range/1000:.2f} km")
+
+                # Set interval to print reports
+                next_report_time = report_interval
 
             else:
                 # Convert jd time from days to seconds
@@ -198,7 +236,8 @@ def monitor():
                 predicted_time   = predict_collision_time(current_range, closing_velocity)
                 risk             = determine_risk(current_range, predicted_time)
 
-                # Display current state
+            # Display current state at reporting intervals
+            if elapsed_since_init >= next_report_time:
                 print("-" * 40)
                 print(f"Julian date: {sim_jd}")
                 print(f"Elapsed time: {(sim_jd - init_jd) * 86400:.2f} s")
@@ -209,13 +248,14 @@ def monitor():
                 print(f"Risk: {risk}")
 
                 autonomous_response(risk)
-                get_retrograde_thrust(satellite_b)
+                next_report_time += report_interval
+                #get_retrograde_thrust(satellite_b)
 
-                # Save current state
-                previous_range = current_range
-                previous_jd = sim_jd
+            # Save current state
+            previous_range = current_range
+            previous_jd = sim_jd
 
-                error_count = 0
+            error_count = 0
 
         except KeyboardInterrupt:
             print("\nCollision monitor stopped.")
@@ -223,15 +263,16 @@ def monitor():
         except Exception as error:
             error_count += 1
             print(f"Monitor error {error_count}/5: {error}")
-            time.sleep(check_interval)
+            time.sleep(5)
             if error_count >= 5:
                 print("Too many consecutive errors. Stopping monitor.")
                 break
 
 if __name__ == "__main__":
     print("""
-Two satellites are in a normal safe range until an event, at which point the risk
-assessment would reach CRITICAL if not for autonomous systems preventing it.
+Two satellites begin in a safe orbital configuration. After 120 seconds, an anomalous maneuver causes Sat B to deviate
+from its original trajectory. The monitoring system tracks their separation and closing velocity, predicts whether they
+will cross the 5 km safety boundary, and determines when an avoidance response is required.
 """)
 
     # Scene setup
@@ -249,11 +290,6 @@ assessment would reach CRITICAL if not for autonomous systems preventing it.
     semi_maj_a    = radius_earth + init_alt                   # km
     init_nu       = set_true_anomaly(init_distance, init_alt) # deg
 
-    # Thruster settings (values from example_constraint_monitor_correction.py)
-    Tmax_g1  = 1.0 # N
-    dVmax_g1 = 200.0 # m/s
-    Isp_g1   = 2000.0 # s
-
     for n, sat_name in enumerate(sat_list):
         mds_api.add_sat_from_elements(
             sat_name,
@@ -266,6 +302,7 @@ assessment would reach CRITICAL if not for autonomous systems preventing it.
             init_nu * n,       # True anomoly [deg]
             "Earth"            # Central body
         )
+        
         # Give satellites thrusters
         mds_api.add_thruster(
             sat_name,
@@ -273,7 +310,7 @@ assessment would reach CRITICAL if not for autonomous systems preventing it.
             dVmax_g1, # delta V
             Isp_g1,   # isp
             1000,     # burn duration limit
-            1.0       # fuel consumption rate
+            5.0       # fuel consumption rate
         )
         print(f"Added {sat_name} to scene...")
     
